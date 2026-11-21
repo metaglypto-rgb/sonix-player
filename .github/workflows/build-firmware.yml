@@ -62,6 +62,16 @@ jobs:
             sonix-player/audio-target
           key: target-libs-${{ runner.os }}-${{ hashFiles('sonix-player/Makefile') }}
 
+      - name: Build cross toolchain (with retries)
+        working-directory: sonix-player
+        run: |
+          export PATH="$(pwd)/../sonix-packer:$PATH"
+          for i in 1 2 3; do
+            if make "$(pwd)/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-gcc"; then exit 0; fi
+            echo "toolchain attempt $i failed"; sleep 20
+          done
+          exit 1
+
       - name: Build target binary
         working-directory: sonix-player
         run: |
@@ -72,7 +82,7 @@ jobs:
         if: failure()
         working-directory: sonix-player
         run: |
-          for f in tmp/rbdev-build/build-glib-*.log; do echo "=== $f"; tail -60 "$f"; done || true
+          f=$(ls -t tmp/rbdev-build/*.log 2>/dev/null | head -1); echo "=== $f"; tail -60 "$f" || true
 
       - name: Fetch stock firmware for R1
         working-directory: sonix-packer
