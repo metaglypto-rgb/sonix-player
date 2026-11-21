@@ -31,6 +31,22 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           submodules: recursive
 
+      - name: Seal streaming keys
+        working-directory: sonix-player
+        env:
+          PODCAST_KEY: ${{ secrets.PODCAST_KEY }}
+          PODCAST_SECRET: ${{ secrets.PODCAST_SECRET }}
+        run: |
+          test -n "$PODCAST_KEY" && test -n "$PODCAST_SECRET"
+          {
+            printf '[qobuz]\napp_id = \napp_secret = \n\n'
+            printf '[tidal]\nclient_id = \nclient_secret = \n\n'
+            printf '[podcast]\napi_key = %s\napi_secret = %s\n\n' "$PODCAST_KEY" "$PODCAST_SECRET"
+            printf '[lastfm]\napi_key = \napi_secret = \n'
+          } > streaming-keys.ini
+          python3 tools/seal_streamkeys.py seal
+          rm -f streaming-keys.ini
+
       - name: Cache Rockbox toolchain
         uses: actions/cache@v4
         with:
@@ -57,12 +73,6 @@ jobs:
           curl -L --fail -o r1_original.upt \
             "https://oss.hiby.com/HiBy%20R1/en-us/2.0/17918591029925z1p5n0e9d5j4r1m4n6.upt"
 
-      - name: Fetch stock firmware for R3 Pro II
-        working-directory: sonix-packer
-        run: |
-          curl -L --fail -o r3proii_original.upt \
-            "https://oss.hiby.com/HiBy%20R3PROII/en-us/1.4/17697548205466c8s6a6n4y5c9k3m7g7.upt"
-
       - name: Build firmware images
         working-directory: sonix-packer
         run: |
@@ -77,3 +87,4 @@ jobs:
           name: sonix-firmware-${{ github.event.inputs.branch }}
           path: sonix-packer/*.upt
           if-no-files-found: error
+          retention-days: 1
