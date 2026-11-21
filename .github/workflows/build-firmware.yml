@@ -23,6 +23,7 @@ jobs:
             libopusfile-dev libwavpack-dev libasound2-dev \
             p7zip-full squashfs-tools genisoimage \
             wget texinfo bison flex libtool libtool-bin autoconf automake gawk patch \
+            gettext autopoint gtk-doc-tools python3 pkg-config \
             libgmp-dev libmpfr-dev libmpc-dev
 
       - name: Check out code
@@ -66,6 +67,12 @@ jobs:
         run: |
           export PATH="$(pwd)/../sonix-packer:$PATH"
           make target -j$(nproc)
+
+      - name: Show toolchain logs on failure
+        if: failure()
+        working-directory: sonix-player
+        run: |
+          for f in tmp/rbdev-build/build-glib-*.log; do echo "=== $f"; tail -60 "$f"; done || true
 
       - name: Fetch stock firmware for R1
         working-directory: sonix-packer
