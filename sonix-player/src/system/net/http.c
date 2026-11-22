@@ -916,6 +916,12 @@ static bool stream_open_once(http_stream_t *st, const char *url, int timeout_sec
 		return false;
 	}
 	if (status != 200) {
+		if (status == 0) {
+			set_last_error("No answer from %s", u.host);
+		} else {
+			set_last_error("HTTP %d from %s", status, u.host);
+		}
+		fprintf(stderr, "http: stream status %d from %s%s\n", status, u.host, u.path);
 		conn_close(&conn);
 		return false;
 	}
@@ -967,8 +973,13 @@ bool http_stream_open(http_stream_t *st, const char *url, int timeout_secs) {
 			return true;
 		}
 		if (status < 300 || status >= 400 || !location[0]) {
+			if (!http_last_error()[0]) {
+				set_last_error("Stream refused (status %d)", status);
+			}
+			fprintf(stderr, "http: stream failed, status %d, hop %d, url %s\n", status, hop, current);
 			return false;
 		}
+		fprintf(stderr, "http: stream redirect %d (hop %d) -> %s\n", status, hop, location);
 
 		if (location[0] == '/') {
 			url_t u;
@@ -982,6 +993,8 @@ bool http_stream_open(http_stream_t *st, const char *url, int timeout_secs) {
 			snprintf(current, sizeof(current), "%s", location);
 		}
 	}
+	set_last_error("Too many redirects");
+	fprintf(stderr, "http: stream gave up after %d redirects, last url %s\n", HTTP_MAX_REDIRECTS, current);
 	return false;
 }
 

@@ -37,7 +37,7 @@
 // Returns false on any failure, leaving *out untouched. `limit` caps how much
 // body is kept; a longer response is truncated rather than allowed to eat the
 // heap.
-#define HTTP_MAX_REDIRECTS 5
+#define HTTP_MAX_REDIRECTS 10
 bool http_get(const char *url, char **out, size_t *out_len, size_t limit, int timeout_secs);
 
 // The same, for callers talking to an API rather than a radio station.
