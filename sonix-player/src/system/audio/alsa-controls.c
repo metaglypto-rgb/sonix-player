@@ -143,6 +143,42 @@ bool alsa_board_is_cs43131(void) {
 	return answer != 0;
 }
 
+// The R1's headphones plugged in while it runs: silence until a restart.
+//
+// The route is 2 from boot on and never changes, and the machine driver does
+// nothing when it is handed the route it already holds. But the CS43131's
+// headphone amplifier is set up when the codec powers up, for whatever is in
+// the socket at that moment: power it up with the socket empty, plug in later,
+// and the stream runs clean into a silent output. Booting with the plug
+// already in works, and so does powering the codec down and up again (route
+// 0, then 2) once the plug is in -- the same thing, without the reboot.
+//
+// Every read of the jack counts the plug-ins it sees (empty -> plugged). The
+// playback loop compares alsa_output_key() every few buffers, and on this board
+// the count is part of the key, so a plug-in mid-track makes it reroute: close
+// the stream, auto_set_output(), reopen. auto_set_output() power-cycles the
+// codec when the count has moved since it last applied the route.
+static pthread_mutex_t r1_jack_lock = PTHREAD_MUTEX_INITIALIZER;
+static int r1_jack_last = -1; // -1: nothing read yet, so boot is not a plug-in
+static int r1_plugins;		  // plug-ins seen
+static int r1_plugins_applied; // r1_plugins when the route was last applied
+
+static int r1_note_jack(int state) {
+	if (!alsa_board_is_cs43131()) {
+		return 0;
+	}
+	pthread_mutex_lock(&r1_jack_lock);
+	if (r1_jack_last == JACK_NONE && state != JACK_NONE) {
+		r1_plugins++;
+	}
+	r1_jack_last = state;
+	int n = r1_plugins;
+	pthread_mutex_unlock(&r1_jack_lock);
+	return n;
+}
+
+static int read_jack_state(void);
+
 static bool lineout_on;
 static int lineout_saved_percent = -1;
 static int lineout_jack; // the jack the mode was switched on for
@@ -409,7 +445,14 @@ static bool want_balance_lineout(void) { return lineout_on && detect_output() ==
 // alone, because on the 4.4 mm jack headphone and line out are both route 3 and
 // only the flag tells them apart -- without it, switching to line out mid-track
 // would leave the stream on the old configuration until the next track.
-int alsa_output_key(void) { return detect_output() * 2 + (want_balance_lineout() ? 1 : 0); }
+int alsa_output_key(void) {
+	int key = detect_output() * 2 + (want_balance_lineout() ? 1 : 0);
+	// Multiples of 8 keep the low bits as they are (bit 0 is the line-out flag).
+	if (alsa_board_is_cs43131()) {
+		key += 8 * (r1_note_jack(read_jack_state()) & 0xffff);
+	}
+	return key;
+}
 
 // The DAC's four digital interpolation filters, the ALSA "Digital Filter"
 // control the stock player writes (0..3), on both boards:
@@ -729,9 +772,41 @@ void auto_set_output(void) {
 	// The CS43131 board: one route, no line-out flag, no transition to force.
 	if (alsa_board_is_cs43131()) {
 		int route = detect_output();
-		if (route != current_output && alsa_set_control("Output Port Switch", route) >= 0) {
-			current_output = route;
-			printf("set output to %d\n", route);
+		int jack = read_jack_state();
+		int plugins = r1_note_jack(jack);
+		if (route != current_output) {
+			if (alsa_set_control("Output Port Switch", route) >= 0) {
+				current_output = route;
+				r1_plugins_applied = plugins;
+				printf("set output to %d\n", route);
+			}
+			return;
+		}
+		if (plugins != r1_plugins_applied && jack != JACK_NONE) {
+			// Down and up again with the plug in (see r1_note_jack()). No PCM
+			// is open here, so the codec can be powered off without stalling
+			// anything, and nothing plays until its settings are back.
+			alsa_set_control("Output Port Switch", 0);
+			usleep(50 * 1000);
+			if (alsa_set_control("Output Port Switch", route) >= 0) {
+				r1_plugins_applied = plugins;
+				usleep(30 * 1000);
+				// A power-up may bring the codec's registers back to their
+				// defaults -- 0 dB is the loudest -- so the level and the
+				// filters go back before any sound does.
+				int filter = get_dac_filter();
+				int nos = get_dac_nos();
+				current_filter = -1;
+				current_nos = -1;
+				set_dac_filter(filter);
+				set_dac_nos(nos);
+				if (lineout_on) {
+					apply_volume_hw(LINEOUT_VOLUME_INDEX);
+				} else {
+					write_dac_attenuation();
+				}
+				fprintf(stderr, "alsa: R1 headphones plugged in; codec powered down and up again on route %d\n", route);
+			}
 		}
 		return;
 	}
@@ -1220,7 +1295,7 @@ int get_high_gain(void) { return high_gain; }
 
 // Which jack is occupied right now: reads the same switch nodes the output
 // route detection uses. Balanced wins when both report plugged.
-int headphone_jack_state(void) {
+static int read_jack_state(void) {
 	if (file_matches("/sys/class/switch/balance/state", "1")) {
 		return JACK_BALANCED;
 	}
@@ -1228,6 +1303,12 @@ int headphone_jack_state(void) {
 		return JACK_HEADSET;
 	}
 	return JACK_NONE;
+}
+
+int headphone_jack_state(void) {
+	int state = read_jack_state();
+	r1_note_jack(state);
+	return state;
 }
 
 // Raw attenuation delta, clamped to the 0-255 register range.
